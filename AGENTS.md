@@ -47,6 +47,9 @@ When adding settings:
 - Provide sane defaults or `None` to let vLLM use its defaults
 - Never require configuration for optional features
 
+
+- Do not modify or rely on the value of `RP_WORKSPACE`. It is platform-specific and controlled by Runpod, not this project.
+
 ## Additional Help
 
 If you need specifics about Runpod Serverless APIs, endpoints, or deployment:

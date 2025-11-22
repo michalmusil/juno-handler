@@ -43,7 +43,7 @@ def handler(job):
     input_validation = validate(job["input"], VALIDATIONS)
 
     if "errors" in input_validation:
-        return {"error": input_validation["errors"]}
+        return {"error": {"type": "validation_error", "message": "Invalid input", "details": input_validation["errors"]}}
     job_input = input_validation["validated_input"]
 
     messages = job_input.get("messages")
@@ -53,11 +53,11 @@ def handler(job):
     top_p = job_input.get("top_p")
 
     if messages and prompt:
-        return {"error": "Provide either 'messages' or 'prompt', not both"}
-    
+        return {"error": {"type": "validation_error", "message": "Provide either 'messages' or 'prompt', not both"}}
+
     if not messages and not prompt:
-        return {"error": "Either 'messages' or 'prompt' is required"}
-    
+        return {"error": {"type": "validation_error", "message": "Either 'messages' or 'prompt' is required"}}
+
     if prompt:
         job_input["messages"] = [{"role": "user", "content": prompt}]
     
