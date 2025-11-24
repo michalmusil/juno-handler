@@ -15,7 +15,7 @@ TOKENIZER = os.getenv("MODEL_TOKENIZER")
 CONFIG_FORMAT = os.getenv("MODEL_CONFIG_FORMAT")
 LOAD_FORMAT = os.getenv("MODEL_LOAD_FORMAT")
 QUANTIZATION = os.getenv("MODEL_QUANTIZATION")
-MAX_MODEL_LEN = int(os.getenv("MODEL_MAX_LEN") or "8192")
+MAX_MODEL_LEN = int(os.getenv("MODEL_MAX_LEN")) if os.getenv("MODEL_MAX_LEN") else None
 
 DEFAULT_TEMPERATURE = float(os.getenv("MODEL_TEMPERATURE") or "0.15")
 DEFAULT_MAX_TOKENS = int(os.getenv("MAX_SAMPLING_TOKENS") or "32768")
@@ -112,7 +112,7 @@ if __name__ == '__main__':
         quantization=QUANTIZATION,
         max_model_len=MAX_MODEL_LEN,
         tensor_parallel_size=int(os.getenv("RUNPOD_GPU_COUNT") or "1"),
-        gpu_memory_utilization=float(os.getenv("GPU_MEMORY_UTILIZATION") or "0.9"),
+        gpu_memory_utilization=float(os.getenv("GPU_MEMORY_UTILIZATION") or "0.8"),
     )
 
     runpod.serverless.start({"handler": handler})

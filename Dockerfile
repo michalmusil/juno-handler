@@ -2,7 +2,8 @@
 FROM runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404
 
 # This is the location of the network volume for serverless endpoints.
-ENV RP_WORKSPACE=/runpod-volume
+ENV HF_HOME=/runpod-volume/.cache/huggingface
+ENV VLLM_LOGGING_COLOR="0"
 
 # NOTICE: This variable will cause uv sync to uninstall system dependencies that are not in the pyproject.toml file.
 # This includes Jupyter, which is installed by default in the base image. 

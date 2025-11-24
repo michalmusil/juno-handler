@@ -116,8 +116,8 @@ response = client.chat.completions.create(
 
 **Optional model settings:**
 - `MODEL_QUANTIZATION` - awq, gptq, fp8 (valid vLLM arguments)
-- `MODEL_MAX_LEN` (default: 8192) - Maximum context length (controls KV cache allocation)
-- `MODEL_TOKENIZER`, `MODEL_CONFIG_FORMAT`, `MODEL_LOAD_FORMAT` - only if your model needs them or vllm can't guess it
+- `MODEL_MAX_LEN` - Maximum context length in tokens (controls KV cache allocation)
+- `MODEL_TOKENIZER`, `MODEL_CONFIG_FORMAT`, `MODEL_LOAD_FORMAT` - only if your model needs them/vllm can't guess it
 
 **Generation settings:**
 - `MODEL_TEMPERATURE` (default: 0.15)
