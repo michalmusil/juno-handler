@@ -13,9 +13,9 @@ ENV UV_PROJECT_ENVIRONMENT=/usr/local
 # Pick a folder, call it whatever you want - we call this project Juno.
 WORKDIR /opt/juno
 
-COPY pyproject.toml uv.lock ./
+COPY requirements.txt ./
 
-RUN uv sync --no-dev
+RUN pip install --no-cache-dir -r requirements.txt
 
 COPY juno ./juno
 CMD ["python", "-m", "juno.handler"]

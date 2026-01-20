@@ -8,32 +8,40 @@ import runpod
 from runpod.serverless import log
 from runpod.serverless.utils.rp_validator import validate
 from vllm import LLM, SamplingParams
+from vllm.model_executor.models.deepseek_ocr import NGramPerReqLogitsProcessor
 
 from juno.schema import VALIDATIONS
 
 MODEL = os.getenv("MODEL_NAME")
-DTYPE = os.getenv("MODEL_DTYPE")
-QUANTIZATION = os.getenv("MODEL_QUANTIZATION")
-TRUST_REMOTE_CODE = os.getenv("MODEL_TRUST_REMOTE_CODE", "").lower() in ("true", "1", "yes")
-TOKENIZER = os.getenv("MODEL_TOKENIZER")
-CONFIG_FORMAT = os.getenv("MODEL_CONFIG_FORMAT")
-LOAD_FORMAT = os.getenv("MODEL_LOAD_FORMAT")
+# DTYPE = os.getenv("MODEL_DTYPE")
+# QUANTIZATION = os.getenv("MODEL_QUANTIZATION")
+# TRUST_REMOTE_CODE = os.getenv("MODEL_TRUST_REMOTE_CODE", "").lower() in ("true", "1", "yes")
+# TOKENIZER = os.getenv("MODEL_TOKENIZER")
+# CONFIG_FORMAT = os.getenv("MODEL_CONFIG_FORMAT")
+# LOAD_FORMAT = os.getenv("MODEL_LOAD_FORMAT")
 
-MAX_MODEL_LEN = int(os.getenv("MODEL_MAX_LEN")) if os.getenv("MODEL_MAX_LEN") else None
-MAX_NUM_SEQS = int(os.getenv("MODEL_MAX_NUM_SEQS")) if os.getenv("MODEL_MAX_NUM_SEQS") else None
-DISTRIBUTED_EXECUTOR_BACKEND = os.getenv("DISTRIBUTED_EXECUTOR_BACKEND")
+# MAX_MODEL_LEN = int(os.getenv("MODEL_MAX_LEN")) if os.getenv("MODEL_MAX_LEN") else None
+# MAX_NUM_SEQS = int(os.getenv("MODEL_MAX_NUM_SEQS")) if os.getenv("MODEL_MAX_NUM_SEQS") else None
+# DISTRIBUTED_EXECUTOR_BACKEND = os.getenv("DISTRIBUTED_EXECUTOR_BACKEND")
 
-DEFAULT_TEMPERATURE = float(os.getenv("MODEL_TEMPERATURE") or "0.15")
-DEFAULT_MAX_TOKENS = int(os.getenv("MODEL_MAX_TOKENS") or "32768")
-DEFAULT_TOP_P = float(os.getenv("MODEL_TOP_P") or "0.95")
+# DEFAULT_TEMPERATURE = float(os.getenv("MODEL_TEMPERATURE") or "0.15")
+# DEFAULT_MAX_TOKENS = int(os.getenv("MODEL_MAX_TOKENS") or "32768")
+# DEFAULT_TOP_P = float(os.getenv("MODEL_TOP_P") or "0.95")
 
 model = None
+
 
 def handler(job):
     input_validation = validate(job["input"], VALIDATIONS)
 
     if "errors" in input_validation:
-        return {"error": {"type": "validation_error", "message": "Invalid input", "details": input_validation["errors"]}}
+        return {
+            "error": {
+                "type": "validation_error",
+                "message": "Invalid input",
+                "details": input_validation["errors"],
+            }
+        }
     job_input = input_validation["validated_input"]
 
     messages = job_input.get("messages")
@@ -43,18 +51,34 @@ def handler(job):
     top_p = job_input.get("top_p")
 
     if messages and prompt:
-        return {"error": {"type": "validation_error", "message": "Provide either 'messages' or 'prompt', not both"}}
+        return {
+            "error": {
+                "type": "validation_error",
+                "message": "Provide either 'messages' or 'prompt', not both",
+            }
+        }
 
     if not messages and not prompt:
-        return {"error": {"type": "validation_error", "message": "Either 'messages' or 'prompt' is required"}}
+        return {
+            "error": {
+                "type": "validation_error",
+                "message": "Either 'messages' or 'prompt' is required",
+            }
+        }
 
     if prompt:
         job_input["messages"] = [{"role": "user", "content": prompt}]
-    
+
     sampler = SamplingParams(
-        temperature=temperature if temperature is not None else DEFAULT_TEMPERATURE,
-        max_tokens=max_tokens if max_tokens is not None else DEFAULT_MAX_TOKENS,
-        top_p=top_p if top_p is not None else DEFAULT_TOP_P,
+        temperature=0.0,
+        max_tokens=8192,
+        # ngram logit processor args
+        extra_args=dict(
+            ngram_size=30,
+            window_size=90,
+            whitelist_token_ids={128821, 128822},  # whitelist: <td>, </td>
+        ),
+        skip_special_tokens=False,
     )
 
     model_output = model.chat(
@@ -71,10 +95,10 @@ def handler(job):
     text = output.text
     reasoning_content = None
 
-    think_match = re.search(r'<think>(.*?)</think>', text, re.DOTALL)
+    think_match = re.search(r"<think>(.*?)</think>", text, re.DOTALL)
     if think_match:
         reasoning_content = think_match.group(1).strip()
-        text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL).strip()
+        text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
 
     message = {
         "role": "assistant",
@@ -82,7 +106,7 @@ def handler(job):
         "content": text,
     }
 
-    if hasattr(output, 'tool_calls') and output.tool_calls:
+    if hasattr(output, "tool_calls") and output.tool_calls:
         message["tool_calls"] = output.tool_calls
 
     return {
@@ -90,39 +114,30 @@ def handler(job):
         "object": "chat.completion",
         "created": int(time.time()),
         "model": MODEL,
-        "choices": [{
-            "index": 0,
-            "message": message,
-            "finish_reason": output.finish_reason,
-        }],
+        "choices": [
+            {
+                "index": 0,
+                "message": message,
+                "finish_reason": output.finish_reason,
+            }
+        ],
         "usage": {
             "prompt_tokens": len(result.prompt_token_ids),
             "completion_tokens": len(output.token_ids),
             "total_tokens": len(result.prompt_token_ids) + len(output.token_ids),
-        }
+        },
     }
 
 
-if __name__ == '__main__':
-    if not MODEL:
-        print("Define a MODEL_NAME...")
-        sys.exit(1)
+if __name__ == "__main__":
 
-    log.info("Loading {}...".format(MODEL))
+    log.info("Loading...")
 
     model = LLM(
         model=MODEL,
-        tokenizer_mode=TOKENIZER or "auto",
-        config_format=CONFIG_FORMAT or "auto",
-        load_format=LOAD_FORMAT or "auto",
-        quantization=QUANTIZATION,
-        max_model_len=MAX_MODEL_LEN,
-        dtype=DTYPE or "auto",
-        trust_remote_code=TRUST_REMOTE_CODE,
-        max_num_seqs=MAX_NUM_SEQS,
-        distributed_executor_backend=DISTRIBUTED_EXECUTOR_BACKEND,
-        tensor_parallel_size=int(os.getenv("RUNPOD_GPU_COUNT") or "1"),
-        gpu_memory_utilization=float(os.getenv("GPU_MEMORY_UTILIZATION") or "0.8"),
+        enable_prefix_caching=False,
+        mm_processor_cache_gb=0,
+        logits_processors=[NGramPerReqLogitsProcessor],
     )
 
     runpod.serverless.start({"handler": handler})
