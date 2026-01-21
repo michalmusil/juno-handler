@@ -4,6 +4,10 @@ import sys
 import time
 import uuid
 
+import base64
+from io import BytesIO
+from PIL import Image
+
 import runpod
 from runpod.serverless import log
 from runpod.serverless.utils.rp_validator import validate
@@ -65,9 +69,32 @@ def handler(job):
                 "message": "Either 'messages' or 'prompt' is required",
             }
         }
-
+    input = None
     if prompt:
-        job_input["messages"] = [{"role": "user", "content": prompt}]
+        input = [{"prompt": prompt}]
+
+    if messages:
+        input = []
+        for msg in messages:
+            # 1. Get the base64 string from the nested dictionary
+            mm_data = msg.get("multi_modal_data", {})
+            image_b64 = mm_data.get("image")
+
+            if image_b64:
+                try:
+                    # 2. Decode the base64 string
+                    image_bytes = base64.b64decode(image_b64)
+
+                    # 3. Create PIL Image and convert to RGB
+                    pil_img = Image.open(BytesIO(image_bytes)).convert("RGB")
+
+                    # 4. Update the dictionary with the actual PIL object
+                    msg["multi_modal_data"]["image"] = pil_img
+                except Exception as e:
+                    log.error(f"Failed to decode image: {e}")
+                    # You might want to return an error response here
+
+        input.append(msg)
 
     sampler = SamplingParams(
         temperature=0.0,
@@ -81,13 +108,7 @@ def handler(job):
         skip_special_tokens=False,
     )
 
-    model_output = model.chat(
-        messages=job_input["messages"],
-        sampling_params=sampler,
-        use_tqdm=False,
-        chat_template_content_format="string",
-        tools=job_input.get("tools", None),
-    )
+    model_output = model.generate(input, sampler)
 
     result = model_output[0]
     output = result.outputs[0]
