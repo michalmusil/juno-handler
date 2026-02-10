@@ -1,6 +1,5 @@
 import os
 import re
-import sys
 import time
 import uuid
 
@@ -50,9 +49,9 @@ def handler(job):
 
     messages = job_input.get("messages")
     prompt = job_input.get("prompt")
-    temperature = job_input.get("temperature")
-    max_tokens = job_input.get("max_tokens")
-    top_p = job_input.get("top_p")
+    # temperature = job_input.get("temperature")
+    # max_tokens = job_input.get("max_tokens")
+    # top_p = job_input.get("top_p")
 
     if messages and prompt:
         return {
@@ -96,17 +95,7 @@ def handler(job):
 
         input.append(msg)
 
-    sampler = SamplingParams(
-        temperature=0.0,
-        max_tokens=8192,
-        # ngram logit processor args
-        extra_args=dict(
-            ngram_size=30,
-            window_size=90,
-            whitelist_token_ids={128821, 128822},  # whitelist: <td>, </td>
-        ),
-        skip_special_tokens=False,
-    )
+    sampler = SamplingParams(temperature=0.0, max_tokens=8192)
 
     model_output = model.generate(input, sampler)
 
@@ -158,7 +147,7 @@ if __name__ == "__main__":
         model=MODEL,
         enable_prefix_caching=False,
         mm_processor_cache_gb=0,
-        logits_processors=[NGramPerReqLogitsProcessor],
+        trust_remote_code=True,
     )
 
     runpod.serverless.start({"handler": handler})
