@@ -2,7 +2,6 @@ import os
 import re
 import time
 import uuid
-
 import base64
 from io import BytesIO
 from PIL import Image
@@ -11,113 +10,89 @@ import runpod
 from runpod.serverless import log
 from runpod.serverless.utils.rp_validator import validate
 from vllm import LLM, SamplingParams
-from vllm.model_executor.models.deepseek_ocr import NGramPerReqLogitsProcessor
+from transformers import AutoProcessor
 
 from juno.schema import VALIDATIONS
 
 MODEL = os.getenv("MODEL_NAME")
-# DTYPE = os.getenv("MODEL_DTYPE")
-# QUANTIZATION = os.getenv("MODEL_QUANTIZATION")
-# TRUST_REMOTE_CODE = os.getenv("MODEL_TRUST_REMOTE_CODE", "").lower() in ("true", "1", "yes")
-# TOKENIZER = os.getenv("MODEL_TOKENIZER")
-# CONFIG_FORMAT = os.getenv("MODEL_CONFIG_FORMAT")
-# LOAD_FORMAT = os.getenv("MODEL_LOAD_FORMAT")
-
-# MAX_MODEL_LEN = int(os.getenv("MODEL_MAX_LEN")) if os.getenv("MODEL_MAX_LEN") else None
-# MAX_NUM_SEQS = int(os.getenv("MODEL_MAX_NUM_SEQS")) if os.getenv("MODEL_MAX_NUM_SEQS") else None
-# DISTRIBUTED_EXECUTOR_BACKEND = os.getenv("DISTRIBUTED_EXECUTOR_BACKEND")
-
-# DEFAULT_TEMPERATURE = float(os.getenv("MODEL_TEMPERATURE") or "0.15")
-# DEFAULT_MAX_TOKENS = int(os.getenv("MODEL_MAX_TOKENS") or "32768")
-# DEFAULT_TOP_P = float(os.getenv("MODEL_TOP_P") or "0.95")
-
 model = None
+processor = None
 
+def clean_repeated_substrings(text):
+    """Clean repeated substrings in text - required for HunyuanOCR output stability"""
+    n = len(text)
+    if n < 8000:
+        return text
+    for length in range(2, n // 10 + 1):
+        candidate = text[-length:] 
+        count = 0
+        i = n - length
+        while i >= 0 and text[i:i + length] == candidate:
+            count += 1
+            i -= length
+        if count >= 10:
+            return text[:n - length * (count - 1)]  
+    return text
 
 def handler(job):
     input_validation = validate(job["input"], VALIDATIONS)
-
     if "errors" in input_validation:
-        return {
-            "error": {
-                "type": "validation_error",
-                "message": "Invalid input",
-                "details": input_validation["errors"],
-            }
-        }
+        return {"error": {"type": "validation_error", "details": input_validation["errors"]}}
+    
     job_input = input_validation["validated_input"]
+    messages_input = job_input.get("messages")
+    
+    vllm_inputs = []
 
-    messages = job_input.get("messages")
-    prompt = job_input.get("prompt")
-    # temperature = job_input.get("temperature")
-    # max_tokens = job_input.get("max_tokens")
-    # top_p = job_input.get("top_p")
-
-    if messages and prompt:
-        return {
-            "error": {
-                "type": "validation_error",
-                "message": "Provide either 'messages' or 'prompt', not both",
-            }
-        }
-
-    if not messages and not prompt:
-        return {
-            "error": {
-                "type": "validation_error",
-                "message": "Either 'messages' or 'prompt' is required",
-            }
-        }
-    input = None
-    if prompt:
-        input = [{"prompt": prompt}]
-
-    if messages:
-        input = []
-        for msg in messages:
-            # 1. Get the base64 string from the nested dictionary
+    if messages_input:
+        for msg in messages_input:
+            user_text = msg.get("prompt")
             mm_data = msg.get("multi_modal_data", {})
             image_b64 = mm_data.get("image")
-
+            
+            pil_images = []
+            
+            content = []
             if image_b64:
                 try:
-                    # 2. Decode the base64 string
                     image_bytes = base64.b64decode(image_b64)
-
-                    # 3. Create PIL Image and convert to RGB
                     pil_img = Image.open(BytesIO(image_bytes)).convert("RGB")
-
-                    # 4. Update the dictionary with the actual PIL object
-                    msg["multi_modal_data"]["image"] = pil_img
+                    pil_images.append(pil_img)
+                    # Note: We pass a placeholder here for the processor to replace
+                    content.append({"type": "image", "image": "placeholder"})
                 except Exception as e:
-                    log.error(f"Failed to decode image: {e}")
-                    # You might want to return an error response here
+                    log.error(f"Image decode failed: {e}")
 
-        input.append(msg)
+            if user_text:
+                content.append({"type": "text", "text": user_text})
 
-    sampler = SamplingParams(temperature=0.0, max_tokens=8192)
+            # 2. Apply Processor Chat Template (Matching official tutorial)
+            template_msgs = [
+                {"role": "system", "content": ""},
+                {"role": "user", "content": content}
+            ]
+            
+            prompt_string = processor.apply_chat_template(
+                template_msgs, 
+                tokenize=False, 
+                add_generation_prompt=True
+            )
 
-    model_output = model.generate(input, sampler)
+            # 3. Construct the vLLM dict
+            vllm_inputs.append({
+                "prompt": prompt_string,
+                "multi_modal_data": {"image": pil_images}
+            })
 
-    result = model_output[0]
-    output = result.outputs[0]
+    sampler = SamplingParams(temperature=0, max_tokens=16384)
+    model_outputs = model.generate(vllm_inputs, sampler)
 
-    text = output.text
-    reasoning_content = None
-
-    think_match = re.search(r"<think>(.*?)</think>", text, re.DOTALL)
-    if think_match:
-        reasoning_content = think_match.group(1).strip()
-        text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
-
-    message = {
-        "role": "assistant",
-        "reasoning_content": reasoning_content,
-        "content": text,
-    }
-
-    if hasattr(output, "tool_calls") and output.tool_calls:
-        message["tool_calls"] = output.tool_calls
+    # Process first output
+    result = model_outputs[0]
+    raw_text = result.outputs[0].text
+    
+    # Apply official cleaning function
+    final_text = clean_repeated_substrings(raw_text)
 
     return {
         "id": os.getenv("RUNPOD_REQUEST_ID") or f"rp-{uuid.uuid4().hex[:8]}",
@@ -127,27 +102,29 @@ def handler(job):
         "choices": [
             {
                 "index": 0,
-                "message": message,
-                "finish_reason": output.finish_reason,
+                "message": {
+                    "role": "assistant",
+                    "content": final_text
+                },
+                "finish_reason": result.outputs[0].finish_reason,
             }
         ],
         "usage": {
             "prompt_tokens": len(result.prompt_token_ids),
-            "completion_tokens": len(output.token_ids),
-            "total_tokens": len(result.prompt_token_ids) + len(output.token_ids),
+            "completion_tokens": len(result.outputs[0].token_ids),
+            "total_tokens": len(result.prompt_token_ids) + len(result.outputs[0].token_ids),
         },
     }
 
-
 if __name__ == "__main__":
-
-    log.info("Loading...")
-
+    log.info(f"Loading HunyuanOCR from {MODEL}...")
+    
     model = LLM(
         model=MODEL,
         enable_prefix_caching=False,
         mm_processor_cache_gb=0,
         trust_remote_code=True,
     )
+    processor = AutoProcessor.from_pretrained(MODEL, trust_remote_code=True)
 
     runpod.serverless.start({"handler": handler})
